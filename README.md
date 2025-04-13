@@ -186,6 +186,37 @@ If you're trying to compile Instant Meshes from source and encountering Eigen te
   2. Search for "obj"
   3. Enable the checkbox next to "Import-Export: Wavefront OBJ format"
 
+### "Unknown error (no error message returned)"
+If you receive this error message when trying to run Instant Meshes:
+
+1. Make sure the file has executable permissions:
+   ```bash
+   chmod +x "/path/to/Instant Meshes"
+   ```
+
+2. Try running the executable directly from terminal to see any error messages:
+   ```bash
+   "/path/to/Instant Meshes" --help
+   ```
+
+3. Check if the executable is 32-bit or 64-bit:
+   ```bash
+   file "/path/to/Instant Meshes"
+   ```
+   
+   * If it's 32-bit on a 64-bit system, install compatibility libraries:
+     ```bash
+     sudo apt install lib32stdc++6 lib32z1
+     ```
+
+4. Install all potential dependencies:
+   ```bash
+   sudo apt update
+   sudo apt install libgl1-mesa-glx libglu1-mesa zenity libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+   ```
+
+5. If you're using a pre-built binary, try building from source or vice versa
+
 ## Compatibility
 
 This addon has been tested with:

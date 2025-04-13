@@ -80,23 +80,59 @@ class InstantMeshesTestExecutable(Operator):
         if not os.path.exists(executable_path):
             self.report({'ERROR'}, "Executable not found at specified path")
             return {'CANCELLED'}
+            
+        # Check if the file is executable
+        if not os.access(executable_path, os.X_OK):
+            self.report({'ERROR'}, 
+                       f"File exists but is not executable. Run 'chmod +x \"{executable_path}\"' in terminal")
+            return {'CANCELLED'}
 
         try:
+            # Log the command being run
+            print(f"Testing Instant Meshes executable: {executable_path}")
+            
+            # Run with --help to test basic functionality
             result = subprocess.run([executable_path, "--help"], 
                                    stdout=subprocess.PIPE, 
                                    stderr=subprocess.PIPE,
-                                   timeout=5,
+                                   timeout=10,  # Increased timeout
                                    check=False)
+            
+            # Always log output regardless of result
+            stdout = result.stdout.decode('utf-8', errors='replace')
+            stderr = result.stderr.decode('utf-8', errors='replace')
+            print(f"Instant Meshes test stdout: {stdout}")
+            print(f"Instant Meshes test stderr: {stderr}")
             
             if result.returncode == 0:
                 self.report({'INFO'}, "Instant Meshes executable is working correctly")
                 return {'FINISHED'}
             else:
-                self.report({'ERROR'}, f"Executable test failed with error: {result.stderr.decode('utf-8')}")
+                # Create a more detailed error message
+                error_msg = stderr.strip() if stderr.strip() else "No error output (check console for details)"
+                
+                # Check for common issues
+                if "cannot open shared object file" in stderr:
+                    self.report({'ERROR'}, 
+                               f"Missing library dependencies: {error_msg}\n\n"
+                               f"Try running: sudo apt install libgl1-mesa-glx libglu1-mesa zenity libxrandr-dev "
+                               f"libxinerama-dev libxcursor-dev libxi-dev")
+                elif "Permission denied" in stderr:
+                    self.report({'ERROR'}, 
+                               f"Permission denied. Make sure the file is executable: chmod +x \"{executable_path}\"")
+                else:
+                    self.report({'ERROR'}, f"Executable test failed: {error_msg}")
+                
                 return {'CANCELLED'}
                 
+        except subprocess.TimeoutExpired:
+            self.report({'ERROR'}, 
+                       "Executable test timed out. The program may be hanging or waiting for input. "
+                       "Try running it directly from the terminal to debug.")
+            return {'CANCELLED'}
         except Exception as e:
-            self.report({'ERROR'}, f"Error running executable: {str(e)}")
+            self.report({'ERROR'}, f"Error testing executable: {str(e)}")
+            print(f"Detailed error: {type(e).__name__}: {str(e)}")
             return {'CANCELLED'}
 
 def write_obj_file(obj, filepath, triangulate=True):
@@ -300,17 +336,62 @@ class InstantMeshesRemeshOperator(Operator):
                     error_msg = stderr.strip()
                     if not error_msg:
                         error_msg = "Unknown error (no error message returned)"
+                        # Try to get more information about the executable
+                        try:
+                            file_info = subprocess.run(
+                                ["file", executable_path],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=5,
+                                check=False
+                            ).stdout.decode('utf-8', errors='replace')
+                            
+                            # Check file type for common issues
+                            print(f"File info: {file_info}")
+                            
+                            if "shell script" in file_info.lower():
+                                error_msg = (
+                                    "The executable appears to be a shell script. "
+                                    "Make sure it has executable permissions: chmod +x \"" + executable_path + "\""
+                                )
+                            elif "elf" in file_info.lower():
+                                if "32-bit" in file_info and "64-bit" not in file_info:
+                                    error_msg = (
+                                        "The executable is a 32-bit binary but you're likely on a 64-bit system. "
+                                        "You need to install 32-bit compatibility libraries: "
+                                        "sudo apt install lib32stdc++6 lib32z1"
+                                    )
+                                elif "64-bit" in file_info:
+                                    error_msg = (
+                                        "The executable is a 64-bit binary but failed silently. "
+                                        "This usually indicates missing dependencies. Try: "
+                                        "sudo apt install libgl1-mesa-glx libglu1-mesa zenity libxrandr-dev "
+                                        "libxinerama-dev libxcursor-dev libxi-dev"
+                                    )
+                            elif "text" in file_info.lower():
+                                error_msg = (
+                                    "The file appears to be a text file, not an executable. "
+                                    "Make sure you have the correct path to the Instant Meshes binary."
+                                )
+                        except Exception as e:
+                            print(f"Failed to get file info: {str(e)}")
                     
                     # Look for common errors and provide solutions
                     if "cannot open shared object file" in error_msg:
                         error_msg += (
                             "\n\nThis appears to be a missing library dependency. "
-                            "Try installing: sudo apt install libgl1-mesa-glx libglu1-mesa zenity"
+                            "Try installing: sudo apt install libgl1-mesa-glx libglu1-mesa zenity libxrandr-dev "
+                            "libxinerama-dev libxcursor-dev libxi-dev"
                         )
                     elif "No such file or directory" in error_msg:
                         error_msg += (
                             "\n\nThe Instant Meshes executable could not be run. "
                             "Make sure it has executable permissions: chmod +x 'path/to/Instant Meshes'"
+                        )
+                    elif "Permission denied" in error_msg:
+                        error_msg += (
+                            "\n\nThe Instant Meshes executable doesn't have execute permissions. "
+                            f"Run: chmod +x \"{executable_path}\""
                         )
                     
                     # Report error
@@ -465,6 +546,27 @@ def check_dependencies():
     if not obj_import_available or not obj_export_available:
         print("WARNING: OBJ import/export addons are not enabled. The Instant Meshes addon will use a built-in OBJ handler instead.")
         print("For best results, enable the 'Import-Export: Wavefront OBJ format' addon in Blender preferences.")
+    
+    # Check for system utilities that we use
+    system_tools = ['file', 'chmod']
+    missing_tools = []
+    
+    for tool in system_tools:
+        try:
+            # Try to run the tool with a simple command
+            subprocess.run(
+                [tool, "--version"], 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                timeout=2,
+                check=False
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            missing_tools.append(tool)
+    
+    if missing_tools:
+        print(f"WARNING: Missing system utilities: {', '.join(missing_tools)}")
+        print("Some error detection features may not work correctly.")
     
     return True
 
