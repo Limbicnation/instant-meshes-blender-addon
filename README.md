@@ -143,8 +143,13 @@ If you prefer to build from source:
 * Try with a simpler mesh first
 * Increase the target count if the mesh is too complex
 
+## Compatibility
+
+This addon has been tested with:
+- Blender 4.4.0
+
 ## License
 
-This addon is distributed under the terms of the GNU General Public License.
+This addon is distributed under the terms of the Apache License, Version 2.0 (January 2004).
 
 Instant Meshes is distributed under a modified 3-clause BSD license.
