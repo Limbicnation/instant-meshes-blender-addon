@@ -276,20 +276,62 @@ class InstantMeshesRemeshOperator(Operator):
             # Run Instant Meshes
             try:
                 self.report({'INFO'}, "Running Instant Meshes, please wait...")
+                
+                # Log the command being run for debugging
+                print(f"Running command: {' '.join(cmd)}")
+                
+                # Use a more robust process handling approach
                 process = subprocess.run(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    check=False
+                    check=False,
+                    timeout=120  # 2-minute timeout to prevent hanging
                 )
                 
+                # For debugging, always log output
+                stdout = process.stdout.decode('utf-8', errors='replace')
+                stderr = process.stderr.decode('utf-8', errors='replace')
+                print(f"Instant Meshes stdout: {stdout}")
+                print(f"Instant Meshes stderr: {stderr}")
+                
                 if process.returncode != 0:
-                    self.report({'ERROR'}, 
-                                f"Instant Meshes failed: {process.stderr.decode('utf-8')}")
+                    # Create a user-friendly error message
+                    error_msg = stderr.strip()
+                    if not error_msg:
+                        error_msg = "Unknown error (no error message returned)"
+                    
+                    # Look for common errors and provide solutions
+                    if "cannot open shared object file" in error_msg:
+                        error_msg += (
+                            "\n\nThis appears to be a missing library dependency. "
+                            "Try installing: sudo apt install libgl1-mesa-glx libglu1-mesa zenity"
+                        )
+                    elif "No such file or directory" in error_msg:
+                        error_msg += (
+                            "\n\nThe Instant Meshes executable could not be run. "
+                            "Make sure it has executable permissions: chmod +x 'path/to/Instant Meshes'"
+                        )
+                    
+                    # Report error
+                    self.report({'ERROR'}, f"Instant Meshes failed: {error_msg}")
                     return {'CANCELLED'}
                     
                 if not os.path.exists(output_path):
-                    self.report({'ERROR'}, "Output file not created")
+                    # Check for specific reasons why the output might not be created
+                    if "Cannot initialize NanoGUI" in stdout or "Cannot initialize NanoGUI" in stderr:
+                        self.report({'ERROR'}, 
+                                   "Instant Meshes GUI initialization failed. This typically happens when "
+                                   "running headless or with missing X11 dependencies. Try installing: "
+                                   "sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev zenity")
+                    elif "failed to reproject" in stdout or "failed to reproject" in stderr:
+                        self.report({'ERROR'}, 
+                                   "Instant Meshes failed to reproject the mesh. Try with a simpler mesh "
+                                   "or increase the target face/vertex count.")
+                    else:
+                        self.report({'ERROR'}, 
+                                   "Output file not created. Instant Meshes may have encountered an internal error "
+                                   "processing your mesh. Try with a different mesh or check the console for details.")
                     return {'CANCELLED'}
                     
                 # Import the result using our custom function

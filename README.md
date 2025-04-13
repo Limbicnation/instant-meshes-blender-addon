@@ -143,6 +143,41 @@ If you prefer to build from source:
 * Try with a simpler mesh first
 * Increase the target count if the mesh is too complex
 
+### "Cannot open shared object file" errors
+If you see errors about missing libraries:
+
+```
+error while loading shared libraries: libGL.so.1: cannot open shared object file
+```
+
+Install the required dependencies:
+```bash
+sudo apt update
+sudo apt install libgl1-mesa-glx libglu1-mesa zenity
+```
+
+### "Cannot initialize NanoGUI" errors
+If Instant Meshes fails with GUI initialization errors:
+
+```
+Cannot initialize NanoGUI! 
+```
+
+Install X11 development libraries:
+```bash
+sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev zenity
+```
+
+### Compilation errors with Eigen
+If you're trying to compile Instant Meshes from source and encountering Eigen template errors:
+
+1. Try using the pre-compiled binary instead
+2. If you must compile, try with these flags:
+   ```bash
+   CXXFLAGS="-Wno-error -Wno-int-in-bool-context -Wno-array-bounds" cmake ..
+   make -j$(nproc) CXXFLAGS="-O1"
+   ```
+
 ### AttributeError: Calling operator "bpy.ops.export_scene.obj" error
 * This error occurs when the OBJ format addon is not enabled in Blender
 * The addon will automatically fall back to using a built-in OBJ handler
