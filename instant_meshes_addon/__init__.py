@@ -31,6 +31,9 @@ import bpy
 import os
 import subprocess
 import tempfile
+import bmesh
+from pathlib import Path
+import math
 from bpy.props import (
     StringProperty,
     EnumProperty,
@@ -96,6 +99,123 @@ class InstantMeshesTestExecutable(Operator):
             self.report({'ERROR'}, f"Error running executable: {str(e)}")
             return {'CANCELLED'}
 
+def write_obj_file(obj, filepath, triangulate=True):
+    """
+    Manually write an OBJ file for the given object
+    
+    Args:
+        obj: The Blender object to export
+        filepath: The path to write the OBJ file to
+        triangulate: Whether to triangulate the mesh
+    """
+    mesh = obj.data
+    matrix = obj.matrix_world
+    
+    # Create a bmesh from the mesh
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    
+    # Triangulate if requested
+    if triangulate:
+        bmesh.ops.triangulate(bm, faces=bm.faces)
+    
+    # Open the file for writing
+    with open(filepath, 'w') as f:
+        # Write header
+        f.write("# OBJ file created by Instant Meshes Blender Addon\n")
+        
+        # Write vertices
+        for v in bm.verts:
+            # Transform vertex by object matrix
+            co = matrix @ v.co
+            f.write(f"v {co.x:.6f} {co.y:.6f} {co.z:.6f}\n")
+        
+        # Write normals
+        for v in bm.verts:
+            # Transform normal by object matrix (without translation)
+            normal = matrix.to_3x3() @ v.normal
+            normal.normalize()
+            f.write(f"vn {normal.x:.6f} {normal.y:.6f} {normal.z:.6f}\n")
+        
+        # Write faces
+        for face in bm.faces:
+            # Collect vertex indices (OBJ uses 1-based indexing)
+            indices = [str(v.index + 1) for v in face.verts]
+            
+            # Add vertex normal indices
+            indices_with_normals = [f"{idx}//{idx}" for idx in indices]
+            
+            # Write face
+            f.write(f"f {' '.join(indices_with_normals)}\n")
+    
+    # Free the bmesh
+    bm.free()
+
+
+def read_obj_file(filepath, context):
+    """
+    Import an OBJ file and return the created object
+    
+    Args:
+        filepath: The path to the OBJ file
+        context: The Blender context
+        
+    Returns:
+        The imported Blender object, or None if import failed
+    """
+    try:
+        # First try to use the built-in OBJ importer if available
+        if hasattr(bpy.ops.import_scene, "obj"):
+            bpy.ops.import_scene.obj(filepath=filepath, global_scale=1.0)
+            if len(context.selected_objects) > 0:
+                return context.selected_objects[0]
+        
+        # If that fails, parse the OBJ file manually
+        mesh = bpy.data.meshes.new("ImportedMesh")
+        obj = bpy.data.objects.new("ImportedObject", mesh)
+        
+        vertices = []
+        faces = []
+        
+        with open(filepath, 'r') as f:
+            for line in f:
+                if line.startswith('v '):
+                    # Parse vertex
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
+                        vertices.append((x, y, z))
+                elif line.startswith('f '):
+                    # Parse face
+                    parts = line.split()
+                    face_verts = []
+                    for p in parts[1:]:
+                        # Handle vertex/texture/normal format
+                        vert_index = p.split('/')[0]
+                        # OBJ uses 1-based indexing, so subtract 1
+                        face_verts.append(int(vert_index) - 1)
+                    faces.append(face_verts)
+        
+        # Create the mesh
+        mesh.from_pydata(vertices, [], faces)
+        mesh.update()
+        
+        # Link the object to the scene
+        context.collection.objects.link(obj)
+        
+        # Select and make active
+        for o in context.selected_objects:
+            o.select_set(False)
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        
+        return obj
+    
+    except Exception as e:
+        print(f"Error importing OBJ file: {str(e)}")
+        return None
+
+
 class InstantMeshesRemeshOperator(Operator):
     bl_idname = "instantmeshes.remesh"
     bl_label = "Apply Instant Meshes"
@@ -128,16 +248,8 @@ class InstantMeshesRemeshOperator(Operator):
             original_data = obj.data
             original_matrix = obj.matrix_world.copy()
             
-            # Export to OBJ
-            bpy.ops.export_scene.obj(
-                filepath=input_path,
-                use_selection=True,
-                use_materials=False,
-                use_triangles=True,
-                use_normals=True,
-                use_uvs=False,
-                global_scale=1.0
-            )
+            # Export to OBJ using our custom function instead of the OBJ exporter
+            write_obj_file(obj, input_path, triangulate=True)
             
             # Build Instant Meshes command
             cmd = [executable_path, "-i", input_path, "-o", output_path]
@@ -180,16 +292,11 @@ class InstantMeshesRemeshOperator(Operator):
                     self.report({'ERROR'}, "Output file not created")
                     return {'CANCELLED'}
                     
-                # Import the result
-                bpy.ops.import_scene.obj(
-                    filepath=output_path,
-                    global_scale=1.0
-                )
+                # Import the result using our custom function
+                new_obj = read_obj_file(output_path, context)
                 
-                # Get the newly imported object
-                if len(context.selected_objects) > 0:
-                    new_obj = context.selected_objects[0]
-                    
+                # Check if import was successful
+                if new_obj:
                     # Apply original transformation
                     new_obj.matrix_world = original_matrix
                     
@@ -296,6 +403,7 @@ class InstantMeshesPanel(Panel):
         box.prop(props, "deterministic")
         box.prop(props, "crease_angle")
         
+        # Add a button to apply the remeshing
         layout.operator("instantmeshes.remesh")
 
 classes = (
@@ -306,13 +414,34 @@ classes = (
     InstantMeshesPanel,
 )
 
+def check_dependencies():
+    """Check if required dependencies are available and log warnings if not."""
+    # Let users know if the OBJ import/export is not available
+    obj_import_available = hasattr(bpy.ops.import_scene, "obj")
+    obj_export_available = hasattr(bpy.ops.export_scene, "obj")
+    
+    if not obj_import_available or not obj_export_available:
+        print("WARNING: OBJ import/export addons are not enabled. The Instant Meshes addon will use a built-in OBJ handler instead.")
+        print("For best results, enable the 'Import-Export: Wavefront OBJ format' addon in Blender preferences.")
+    
+    return True
+
 def register():
+    # Check for dependencies
+    check_dependencies()
+    
+    # Register classes
     for cls in classes:
         bpy.utils.register_class(cls)
+    
+    # Register properties
     bpy.types.Scene.instant_meshes_properties = bpy.props.PointerProperty(type=InstantMeshesProperties)
 
 def unregister():
+    # Unregister properties
     del bpy.types.Scene.instant_meshes_properties
+    
+    # Unregister classes
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
