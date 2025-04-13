@@ -143,6 +143,14 @@ If you prefer to build from source:
 * Try with a simpler mesh first
 * Increase the target count if the mesh is too complex
 
+### AttributeError: Calling operator "bpy.ops.export_scene.obj" error
+* This error occurs when the OBJ format addon is not enabled in Blender
+* The addon will automatically fall back to using a built-in OBJ handler
+* For best results, enable the "Import-Export: Wavefront OBJ format" addon in Blender:
+  1. Go to Edit → Preferences → Add-ons
+  2. Search for "obj"
+  3. Enable the checkbox next to "Import-Export: Wavefront OBJ format"
+
 ## Compatibility
 
 This addon has been tested with:
