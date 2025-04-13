@@ -23,8 +23,8 @@ bl_info = {
     "doc_url": "",
     "category": "Mesh",
     "support": "TESTING",
-    "wiki_url": "https://github.com/yourusername/instant-meshes-blender-addon",
-    "tracker_url": "https://github.com/yourusername/instant-meshes-blender-addon/issues"
+    "wiki_url": "https://github.com/limbicnation/instant-meshes-blender-addon",
+    "tracker_url": "https://github.com/limbicnation/instant-meshes-blender-addon/issues"
 }
 
 import bpy

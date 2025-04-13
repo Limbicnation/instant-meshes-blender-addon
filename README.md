@@ -76,13 +76,13 @@ If you prefer to build from source:
 
 #### Option 1: Use a pre-packaged release
 
-1. Download the addon from the [Releases page](https://github.com/yourusername/instant-meshes-blender-addon/releases)
+1. Download the addon from the [Releases page](https://github.com/limbicnation/instant-meshes-blender-addon/releases)
 
 #### Option 2: Package the addon yourself
 
 1. Clone this repository
    ```bash
-   git clone https://github.com/yourusername/instant-meshes-blender-addon.git
+   git clone https://github.com/limbicnation/instant-meshes-blender-addon.git
    cd instant-meshes-blender-addon
    ```
 
