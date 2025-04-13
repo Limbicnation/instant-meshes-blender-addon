@@ -1,0 +1,303 @@
+bl_info = {
+    "name": "Instant Meshes Remeshing",
+    "author": "BlenderLab",
+    "version": (1, 0, 0),
+    "blender": (2, 80, 0),
+    "location": "View3D > Sidebar > Instant Meshes",
+    "description": "Remesh objects using Instant Meshes",
+    "warning": "",
+    "doc_url": "",
+    "category": "Mesh",
+}
+
+import bpy
+import os
+import subprocess
+import tempfile
+from bpy.props import (
+    StringProperty,
+    EnumProperty,
+    IntProperty,
+    BoolProperty,
+    FloatProperty,
+)
+from bpy.types import (
+    Operator,
+    Panel,
+    AddonPreferences,
+)
+
+class InstantMeshesAddonPreferences(AddonPreferences):
+    bl_idname = __name__
+
+    executable_path: StringProperty(
+        name="Executable Path",
+        description="Path to the Instant Meshes executable",
+        default="",
+        subtype='FILE_PATH',
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Instant Meshes Executable:")
+        row = layout.row()
+        row.prop(self, "executable_path", text="")
+        row.operator("instantmeshes.test_executable", text="Test Executable")
+
+class InstantMeshesTestExecutable(Operator):
+    bl_idname = "instantmeshes.test_executable"
+    bl_label = "Test Instant Meshes Executable"
+    bl_description = "Test if the Instant Meshes executable can be found and run"
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__name__].preferences
+        executable_path = prefs.executable_path
+
+        if not executable_path:
+            self.report({'ERROR'}, "No executable path set")
+            return {'CANCELLED'}
+
+        if not os.path.exists(executable_path):
+            self.report({'ERROR'}, "Executable not found at specified path")
+            return {'CANCELLED'}
+
+        try:
+            result = subprocess.run([executable_path, "--help"], 
+                                   stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE,
+                                   timeout=5,
+                                   check=False)
+            
+            if result.returncode == 0:
+                self.report({'INFO'}, "Instant Meshes executable is working correctly")
+                return {'FINISHED'}
+            else:
+                self.report({'ERROR'}, f"Executable test failed with error: {result.stderr.decode('utf-8')}")
+                return {'CANCELLED'}
+                
+        except Exception as e:
+            self.report({'ERROR'}, f"Error running executable: {str(e)}")
+            return {'CANCELLED'}
+
+class InstantMeshesRemeshOperator(Operator):
+    bl_idname = "instantmeshes.remesh"
+    bl_label = "Apply Instant Meshes"
+    bl_description = "Remesh the selected object using Instant Meshes"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and context.active_object.type == 'MESH'
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__name__].preferences
+        executable_path = prefs.executable_path
+        
+        if not executable_path or not os.path.exists(executable_path):
+            self.report({'ERROR'}, "Instant Meshes executable not found")
+            return {'CANCELLED'}
+            
+        obj = context.active_object
+        scene = context.scene
+        props = scene.instant_meshes_properties
+        
+        # Create temporary directory for input/output files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Export the selected object to OBJ
+            input_path = os.path.join(temp_dir, "input.obj")
+            output_path = os.path.join(temp_dir, "output.obj")
+            
+            # Remember original object data and transformation
+            original_data = obj.data
+            original_matrix = obj.matrix_world.copy()
+            
+            # Export to OBJ
+            bpy.ops.export_scene.obj(
+                filepath=input_path,
+                use_selection=True,
+                use_materials=False,
+                use_triangles=True,
+                use_normals=True,
+                use_uvs=False,
+                global_scale=1.0
+            )
+            
+            # Build Instant Meshes command
+            cmd = [executable_path, "-i", input_path, "-o", output_path]
+            
+            # Target count type
+            if props.target_count_type == 'FACES':
+                cmd.extend(["-f", str(props.face_count)])
+            else:
+                cmd.extend(["-v", str(props.vertex_count)])
+                
+            # Other options
+            if props.preserve_sharp:
+                cmd.append("-c")
+            
+            if props.align_to_boundaries:
+                cmd.append("-b")
+                
+            if props.deterministic:
+                cmd.append("-d")
+                
+            if props.crease_angle > 0:
+                cmd.extend(["-a", str(props.crease_angle)])
+            
+            # Run Instant Meshes
+            try:
+                self.report({'INFO'}, "Running Instant Meshes, please wait...")
+                process = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False
+                )
+                
+                if process.returncode != 0:
+                    self.report({'ERROR'}, 
+                                f"Instant Meshes failed: {process.stderr.decode('utf-8')}")
+                    return {'CANCELLED'}
+                    
+                if not os.path.exists(output_path):
+                    self.report({'ERROR'}, "Output file not created")
+                    return {'CANCELLED'}
+                    
+                # Import the result
+                bpy.ops.import_scene.obj(
+                    filepath=output_path,
+                    global_scale=1.0
+                )
+                
+                # Get the newly imported object
+                if len(context.selected_objects) > 0:
+                    new_obj = context.selected_objects[0]
+                    
+                    # Apply original transformation
+                    new_obj.matrix_world = original_matrix
+                    
+                    # Rename object
+                    new_obj.name = f"{obj.name}_remeshed"
+                    
+                    # Set as active object
+                    context.view_layer.objects.active = new_obj
+                    
+                    self.report({'INFO'}, "Remeshing completed successfully")
+                    return {'FINISHED'}
+                else:
+                    self.report({'ERROR'}, "Failed to import remeshed model")
+                    return {'CANCELLED'}
+                    
+            except Exception as e:
+                self.report({'ERROR'}, f"Error during remeshing: {str(e)}")
+                return {'CANCELLED'}
+
+class InstantMeshesProperties(bpy.types.PropertyGroup):
+    target_count_type: EnumProperty(
+        name="Target Count",
+        description="Choose between target face count or vertex count",
+        items=[
+            ('FACES', "Faces", "Target face count"),
+            ('VERTICES', "Vertices", "Target vertex count"),
+        ],
+        default='FACES'
+    )
+    
+    face_count: IntProperty(
+        name="Face Count",
+        description="Target number of faces",
+        default=5000,
+        min=10,
+        max=1000000
+    )
+    
+    vertex_count: IntProperty(
+        name="Vertex Count",
+        description="Target number of vertices",
+        default=5000,
+        min=10,
+        max=1000000
+    )
+    
+    preserve_sharp: BoolProperty(
+        name="Preserve Sharp Edges",
+        description="Preserve sharp features and corners",
+        default=True
+    )
+    
+    align_to_boundaries: BoolProperty(
+        name="Align to Boundaries",
+        description="Align to mesh boundaries",
+        default=True
+    )
+    
+    deterministic: BoolProperty(
+        name="Deterministic",
+        description="Deterministic mode (slower but more stable)",
+        default=False
+    )
+    
+    crease_angle: FloatProperty(
+        name="Crease Angle",
+        description="Dihedral angle threshold for creases (degrees)",
+        default=30.0,
+        min=0.0,
+        max=180.0
+    )
+
+class InstantMeshesPanel(Panel):
+    bl_label = "Instant Meshes"
+    bl_idname = "VIEW3D_PT_instant_meshes"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Instant Meshes"
+    
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        props = scene.instant_meshes_properties
+        
+        # Check if executable path is set
+        prefs = context.preferences.addons[__name__].preferences
+        if not prefs.executable_path or not os.path.exists(prefs.executable_path):
+            layout.label(text="Executable not set or invalid", icon='ERROR')
+            layout.operator("preferences.addon_show", text="Open Preferences").module=__name__
+            return
+            
+        # Main panel
+        box = layout.box()
+        row = box.row()
+        row.prop(props, "target_count_type", expand=True)
+        
+        if props.target_count_type == 'FACES':
+            box.prop(props, "face_count")
+        else:
+            box.prop(props, "vertex_count")
+            
+        box.prop(props, "preserve_sharp")
+        box.prop(props, "align_to_boundaries")
+        box.prop(props, "deterministic")
+        box.prop(props, "crease_angle")
+        
+        layout.operator("instantmeshes.remesh")
+
+classes = (
+    InstantMeshesAddonPreferences,
+    InstantMeshesTestExecutable,
+    InstantMeshesRemeshOperator,
+    InstantMeshesProperties,
+    InstantMeshesPanel,
+)
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
+    bpy.types.Scene.instant_meshes_properties = bpy.props.PointerProperty(type=InstantMeshesProperties)
+
+def unregister():
+    del bpy.types.Scene.instant_meshes_properties
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
+
+if __name__ == "__main__":
+    register()
